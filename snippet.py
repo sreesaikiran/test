@@ -1,26 +1,27 @@
-def safe_eval(expression, variables):
-    # Define allowed operators and functions
-    allowed_names = {
-        'abs': abs,
-        '+': operator.add,
-        '-': operator.sub,
-        '*': operator.mul,
-        '/': operator.truediv,
-        '//': operator.floordiv,
-        '%': operator.mod,
-        '**': operator.pow,
-        '==': operator.eq,
-        '!=': operator.ne,
-        '<': operator.lt,
-        '<=': operator.le,
-        '>': operator.gt,
-        '>=': operator.ge
-    }
+import boto3
 
-    # Add user-defined variables to the allowed context
-    for var in variables:
-        if var.isidentifier() and var not in allowed_names:
-            allowed_names[var] = variables[var]
+# Initialize the DynamoDB client
+dynamodb = boto3.resource('dynamodb')
 
-    # Evaluate the expression using the restricted global context
-    return eval(expression, {"__builtins__": None}, allowed_names)
+# Specify your table name
+table_name = 'your_table_name'
+table = dynamodb.Table(table_name)
+
+# Define the primary key of the item you want to check/update
+primary_key = {'your_primary_key_name': 'your_primary_key_value'}
+
+# Define the new version value to append
+new_version = 'version_value'
+
+# Update the item in the table
+response = table.update_item(
+    Key=primary_key,
+    UpdateExpression="SET versions_list = list_append(if_not_exists(versions_list, :empty_list), :new_version)",
+    ExpressionAttributeValues={
+        ':new_version': [new_version],
+        ':empty_list': [],
+    },
+    ReturnValues="UPDATED_NEW"
+)
+
+print(response)
