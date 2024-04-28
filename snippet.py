@@ -1,39 +1,33 @@
+import pytest
 import boto3
+from botocore.exceptions import ClientError
 
-# Initialize a DynamoDB client
-dynamodb = boto3.resource('dynamodb')
+class TestGlueJob:
+    @pytest.fixture(scope="class", autouse=True)
+    def setup_glue_job(self):
+        # Initialize the AWS Glue client
+        self.glue_client = boto3.client('glue', region_name='your-region')
 
-# Specify the table name and primary key name
-table_name = 'your_table_name'
-primary_key_name = 'database_name'
+        # Define the Glue job name
+        self.job_name = "your-glue-job-name"
 
-# The value of the primary key for the item you want to check
-primary_key_value = 'your_database_name'
+        # Start the Glue job
+        try:
+            response = self.glue_client.start_job_run(JobName=self.job_name)
+            self.job_run_id = response['JobRunId']
+            print(f"Started Glue job: {self.job_name} with run ID: {self.job_run_id}")
 
-# The dictionary you want to append to the versions_list attribute
-new_version_dict = {'version': '1.0', 'date': '2023-03-29'}
+            # Wait for the job to complete (simplistic approach)
+            waiter = self.glue_client.get_waiter('job_run_succeeded')
+            waiter.wait(JobName=self.job_name, RunId=self.job_run_id)
+        except ClientError as e:
+            pytest.fail(f"Failed to start or monitor Glue job: {e}")
 
-# Access the table
-table = dynamodb.Table(table_name)
+    def test_glue_job_successful(self):
+        # Check the job status
+        try:
+            job_status = self.glue_client.get_job_run(JobName=self.job_name, RunId=self.job_run_id)
+            assert job_status['JobRun']['JobRunState'] == 'SUCCEEDED'
+        except ClientError as e:
+            pytest.fail(f"Failed to get job run details: {e}")
 
-# Check if the item with the specified primary key exists
-response = table.get_item(Key={primary_key_name: primary_key_value})
-
-# Check if the item exists
-if 'Item' in response:
-    # Item exists, append the new dictionary to the versions_list attribute
-    update_response = table.update_item(
-        Key={primary_key_name: primary_key_value},
-        UpdateExpression='SET versions_list = list_append(versions_list, :val)',
-        ExpressionAttributeValues={':val': [new_version_dict]},
-        ReturnValues='UPDATED_NEW'
-    )
-    print("Updated item:", update_response)
-else:
-    # Item does not exist, create a new item
-    new_item = {
-        primary_key_name: primary_key_value,
-        'versions_list': [new_version_dict]
-    }
-    put_response = table.put_item(Item=new_item)
-    print("Created new item:", put_response)
