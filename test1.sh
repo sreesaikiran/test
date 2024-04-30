@@ -16,6 +16,15 @@ export -f destroy_terraform
 find /path/to/search/root -type f -name "*.tf" -print0 | while IFS= read -r -d '' file; do
     # Extract the directory from the path of the .tf file
     dir=$(dirname "$file")
-    # Call destroy_terraform function uniquely on directories
-    destroy_terraform "$dir"
+
+    # Extract the base name of the directory to check if it's exactly 'functional'
+    base_dir=$(basename "$dir")
+
+    # Check if the directory name is exactly 'functional'
+    if [[ "$base_dir" == "functional" ]]; then
+        # Call destroy_terraform function uniquely on directories
+        destroy_terraform "$dir"
+    else
+        echo "Skipping non-functional directory: $dir"
+    fi
 done | sort -u
