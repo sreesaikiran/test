@@ -1,57 +1,97 @@
-import com.mongodb.client.model.Filters
-import com.mongodb.client.model.Updates._
-import org.apache.spark.sql.Row
-import org.mongodb.scala.MongoClient
+package com.zaplabs
+
+import com.mongodb.client.model.{Filters, Updates}
+import com.mongodb.client.{MongoClient, MongoClients}
+import com.typesafe.config.Config
+import org.apache.spark.sql.{DataFrame, Row}
+import org.bson.{BsonDateTime, Document}
+
+import java.time.LocalDateTime
+import scala.collection.JavaConverters.asJavaIterableConverter
 import scala.util.Try
 
-// Assuming `filterDf` is a DataFrame and `now` is the current timestamp in milliseconds
-filterDf.foreachPartition { partition: Iterator[Row] =>
-  val mongoClient = MongoClient(config.getString("mongodb.connectionString"))
-  val database = mongoClient.getDatabase(config.getString("mongodb.database"))
-  val collection = database.getCollection(config.getString("mongodb.activeCollection"))
+object OpenHomesProcessor {
 
-  try {
-    partition.foreach { row =>
-      // Handle the "open_homes" field safely
-      val openHomes = Option(row.getAs[Seq[Row]]("open_homes")).getOrElse(Seq.empty).filter { openHome =>
-        val startTime = Try {
-          openHome.getAs[Any]("open_house_start_time") match {
-            case ts: java.sql.Timestamp => ts.getTime
-            case s: String              => java.sql.Timestamp.valueOf(s).getTime
-            case _                      => Long.MaxValue
+
+  def processPartition(df: DataFrame, config: Config, now: LocalDateTime): Unit = {
+    df.foreachPartition { partition: Iterator[Row] =>
+      val mongoClient: MongoClient = MongoClients.create(config.getString("mongodb.connectionString"))
+      val database = mongoClient.getDatabase(config.getString("mongodb.database"))
+      val collection = database.getCollection(config.getString("mongodb.activeCollection"))
+
+      try {
+        partition.foreach { row =>
+          val nowMillis = now.toInstant(java.time.ZoneOffset.UTC).toEpochMilli
+          val openHomes = Option(row.getAs[Seq[Row]]("open_homes")).getOrElse(Seq.empty).filter { openHome =>
+            val startTime = Try {
+              openHome.getAs[Any]("open_house_start_time") match {
+                case ts: java.sql.Timestamp => ts.getTime
+                case s: String => java.sql.Timestamp.valueOf(s).getTime
+                case _ => Long.MaxValue
+              }
+            }.getOrElse(Long.MaxValue)
+            startTime >= nowMillis
           }
-        }.getOrElse(Long.MaxValue) // Default to Long.MaxValue if parsing fails
-        startTime >= now // Filter by the current timestamp
-      }
 
-      // Only update documents with non-empty "open_homes"
-      if (openHomes.nonEmpty) {
-        val openHomesHash = openHomes.map(_.hashCode()).sorted.hashCode() // Generate a consistent hash
-        val update = combine(
-          set("open_house.open_homes", openHomes.map(openHome => Map(
-            "field1" -> openHome.getAs[Any]("field1"), // Replace "field1" with actual fields
-            "field2" -> openHome.getAs[Any]("field2")  // Replace "field2" with actual fields
-          ).asJava).asJava),
-          set("open_house.hash_code", openHomesHash)
-        )
+          val processingDate = new BsonDateTime(System.currentTimeMillis())
+          val filter = Filters.eq("_id", row.getAs[String]("_id"))
+          val update = if (openHomes.nonEmpty) {
+            val openHomesHash = openHomes
+              .map { entry =>
+                (
+                  entry.getAs[Any]("open_house_date") match {
+                    case ts: java.sql.Timestamp => ts.getTime
+                    case s: String => java.sql.Timestamp.valueOf(s).getTime
+                    case l: Long => l
+                    case _ => Long.MaxValue
+                  },
+                  entry.getAs[Any]("open_house_start_time") match {
+                    case ts: java.sql.Timestamp => ts.getTime
+                    case s: String => java.sql.Timestamp.valueOf(s).getTime
+                    case l: Long => l
+                    case _ => Long.MaxValue
+                  },
+                  entry.getAs[Any]("open_house_end_time") match {
+                    case ts: java.sql.Timestamp => ts.getTime
+                    case s: String => java.sql.Timestamp.valueOf(s).getTime
+                    case l: Long => l
+                    case _ => Long.MaxValue
+                  },
+                  entry.getAs[Boolean]("is_canceled")
+                )
+              }
+              .sortBy(_.hashCode())
+              .hashCode()
 
-        // Perform the update operation
-        try {
-          collection.updateOne(
-            Filters.eq("_id", row.getAs[String]("_id")),
-            update
-          ).toFuture().recover {
-            case e: Exception =>
-              println(s"Failed to update document with _id ${row.getAs[String]("_id")}: ${e.getMessage}")
+            val openHouseDocument = new Document("open_homes", openHomes.map { openHome =>
+              openHome.schema.fieldNames.map { fieldName =>
+                fieldName -> openHome.getAs[Any](fieldName)
+              }.toMap.asJava
+            }.asJava)
+            Updates.combine(
+              Updates.set("open_house.open_homes", openHouseDocument),
+              Updates.set("open_house.hash_code", openHomesHash),
+              Updates.set("last_change_date", processingDate),
+              Updates.set("property.listing.dates.last_change_date", processingDate)
+            )
+          } else {
+            val openHouseDocument = new Document("open_homes", Seq.empty.asJava)
+            openHouseDocument.append("is_open_homes", false)
+            Updates.combine(
+              Updates.set("open_house.open_homes", openHouseDocument),
+              Updates.set("open_house.hash_code", 0),
+              Updates.set("last_change_date", processingDate),
+              Updates.set("property.listing.dates.last_change_date", processingDate)
+            )
           }
-        } catch {
-          case e: Exception =>
-            println(s"Error processing row with _id ${row.getAs[String]("_id")}: ${e.getMessage}")
+
+          collection.updateOne(filter, update)
         }
+      } finally {
+        mongoClient.close()
       }
     }
-  } finally {
-    // Ensure the MongoDB client is closed to release resources
-    mongoClient.close()
   }
+
+
 }
