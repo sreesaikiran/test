@@ -1,1 +1,8 @@
 
+overloaded method value apply with alternatives:
+  (underlying: org.mongodb.scala.bson.BsonDocument)org.mongodb.scala.bson.collection.immutable.Document <and>
+  (elems: org.mongodb.scala.bson.BsonMagnets.CanBeBsonElements)org.mongodb.scala.bson.collection.immutable.Document <and>
+  (elems: org.mongodb.scala.bson.BsonMagnets.CanBeBsonElement*)org.mongodb.scala.bson.collection.immutable.Document <and>
+  (json: String)org.mongodb.scala.bson.collection.immutable.Document
+ cannot be applied to (scala.collection.immutable.Map[String,Any])
+              Document(fields)
