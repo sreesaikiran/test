@@ -1,5 +1,25 @@
-overloaded method value apply with alternatives:
-  (elems: org.mongodb.scala.bson.BsonMagnets.CanBeBsonValue*)org.mongodb.scala.bson.BsonArray <and>
-  (elems: Iterable[org.mongodb.scala.bson.BsonValue])org.mongodb.scala.bson.BsonArray
- cannot be applied to (java.util.List[org.bson.BsonValue with Comparable[_ >: org.bson.BsonString with org.bson.BsonInt32 with org.bson.BsonBoolean with org.bson.BsonDouble with org.bson.BsonDateTime <: org.bson.BsonValue with Comparable[_ >: org.bson.BsonString with org.bson.BsonInt32 with org.bson.BsonBoolean with org.bson.BsonDouble with org.bson.BsonDateTime <: org.bson.BsonValue]]])
-                  case arr: WrappedArray[_] => BsonArray(arr.map {
+val openHouseArray = openHomes.map { openHome =>
+  val fields = openHome.schema.fieldNames.map { fieldName =>
+    val value = openHome.getAs[Any](fieldName) match {
+      case s: String              => BsonString(s)
+      case i: Int                 => BsonInt32(i)
+      case b: Boolean             => BsonBoolean(b)
+      case d: Double              => BsonDouble(d)
+      case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
+      case arr: WrappedArray[_] =>
+        BsonArray(arr.map {
+          case s: String              => BsonString(s)
+          case i: Int                 => BsonInt32(i)
+          case b: Boolean             => BsonBoolean(b)
+          case d: Double              => BsonDouble(d)
+          case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
+          case other =>
+            throw new IllegalArgumentException(s"Unsupported type in array: ${other.getClass}")
+        }.toSeq) // Ensure it's a Scala Seq
+      case other =>
+        throw new IllegalArgumentException(s"Unsupported type: ${other.getClass}")
+    }
+    fieldName -> value
+  }.toMap
+  Document(fields)
+}
