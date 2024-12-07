@@ -1,29 +1,50 @@
+package com.zaplabs
+
+import com.typesafe.config.Config
+import com.zaplabs.client.kafka.MdpKafkaProducer
+import com.zaplabs.helper.listing.KafkaHelper
+import com.zaplabs.utils.ConfigUtils
+import org.apache.avro.Schema
+import org.apache.spark.sql.{DataFrame, Row}
+import org.mongodb.scala.bson.collection.immutable.Document
+import org.mongodb.scala.bson.{BsonArray, BsonBoolean, BsonDateTime, BsonDouble, BsonInt32, BsonString}
+import org.mongodb.scala.model.{Filters, Updates}
+import org.mongodb.scala.{MongoClient, _}
+
+import java.time.{Instant, LocalDateTime, ZoneOffset}
+import scala.collection.JavaConverters._
+import scala.collection.mutable.WrappedArray
+import scala.concurrent.Await
+import scala.concurrent.duration.DurationInt
+import scala.util.Try
+import scala.util.chaining.scalaUtilChainingOps
+
 object OpenHomesProcessor {
 
   def processPartition(df: DataFrame, config: Config, now: LocalDateTime, mlsName: String, batchSize: Int): Unit = {
-    val mongoClient: MongoClient = MongoClient(config.getString("mongodb.connectionString"))
-    val database: MongoDatabase = mongoClient.getDatabase(config.getString("mongodb.database"))
-    val collection: MongoCollection[Document] = database.getCollection(config.getString("mongodb.activeCollection"))
+    df.foreachPartition { partition: Iterator[Row] =>
+      val mongoClient: MongoClient = MongoClient(config.getString("mongodb.connectionString"))
+      val database: MongoDatabase = mongoClient.getDatabase(config.getString("mongodb.database"))
+      val collection: MongoCollection[Document] = database.getCollection(config.getString("mongodb.activeCollection"))
 
-    val startTime = Instant.now()
-    val kafkaTopic = config.getString("publishJob.kafkaTopic")
-    val kafkaClientId = config.getString("kafkaConnectorConfiguration.clientName")
-    val kafkaConfig = new java.util.Properties()
-      .tap(_.putAll(ConfigUtils.flatten(config.getObject("kafkaConnectorConfiguration")).asJava))
-    val kafkaSchemaPath = config.getString("publishJob.schemaPath")
-    val clazz = getClass
-    val schemaPath = clazz.getResourceAsStream(kafkaSchemaPath)
-    val kafkaProducer = new MdpKafkaProducer(
-      kafkaTopic,
-      kafkaClientId,
-      kafkaConfig,
-      new Schema.Parser().parse(schemaPath)
-    )
+      val startTime = Instant.now()
+      val kafkaTopic = config.getString("publishJob.kafkaTopic")
+      val kafkaClientId = config.getString("kafkaConnectorConfiguration.clientName")
+      val kafkaConfig = new java.util.Properties()
+          .tap(_.putAll(ConfigUtils.flatten(config.getObject("kafkaConnectorConfiguration")).asJava))
+      val kafkaSchemaPath = config.getString("publishJob.schemaPath")
+      val clazz = getClass
+      val schemaPath = clazz.getResourceAsStream(kafkaSchemaPath)
+      val kafkaProducer = new MdpKafkaProducer(
+        kafkaTopic,
+        kafkaClientId,
+        kafkaConfig,
+        new Schema.Parser().parse(schemaPath)
+      )
+      // Buffer to hold Kafka messages & Mongodb Docs
+      val messagesBuffer = scala.collection.mutable.ArrayBuffer[Document]()
 
-    val messagesBuffer = scala.collection.mutable.ArrayBuffer[Document]()
-
-    try {
-      df.foreachPartition { partition =>
+      try {
         partition.foreach { row =>
           val nowMillis = now.toInstant(ZoneOffset.UTC).toEpochMilli
 
@@ -90,9 +111,9 @@ object OpenHomesProcessor {
 
           // Perform the update synchronously
           try {
-            val updateResult = collection.updateOne(filter, update).results()
+            val updateResult = Await.result(collection.updateOne(filter, update).toFuture(), 500.seconds)
             if (updateResult.wasAcknowledged()) {
-              val updatedDocument = collection.find(filter).first().results()
+              val updatedDocument = Await.result(collection.find(filter).first().toFuture(), 500.seconds)
               messagesBuffer += updatedDocument
               if (messagesBuffer.size >= batchSize) {
                 sendBatchToKafka(kafkaProducer, messagesBuffer, mlsName, startTime)
@@ -112,20 +133,23 @@ object OpenHomesProcessor {
           sendBatchToKafka(kafkaProducer, messagesBuffer, mlsName, startTime)
           messagesBuffer.clear()
         }
+
+      } finally {
+
+        kafkaProducer.flush()
+        kafkaProducer.close()
+        mongoClient.close()
       }
-    } finally {
-      kafkaProducer.flush()
-      kafkaProducer.close()
-      mongoClient.close()
     }
+
   }
 
   /**
    * Utility method to send a batch of messages to Kafka.
    */
-  private def sendBatchToKafka(kafkaProducer: MdpKafkaProducer, messagesBuffer: Seq[Document], mlsName: String, startTime: Instant): Unit = {
+  private def sendBatchToKafka(kafkaProducer: MdpKafkaProducer, messagesBuffer: Seq[Document], mlsName:String, startTime:Instant): Unit = {
     messagesBuffer.foreach { message =>
-      Try {
+      Try{
         val processingTs = Instant.now()
         KafkaHelper.sendMessageToKafkaSecondaryUpdates(
           message,
@@ -156,25 +180,5 @@ object OpenHomesProcessor {
         case _                      => throw new IllegalArgumentException("Invalid timestamp type")
       }
     }.toOption
-  }
-
-  /**
-   * Implicit conversion for synchronous execution.
-   */
-  implicit class SynchronousMongoObservable[T](observable: Observable[T]) {
-    def results(): Seq[T] = {
-      val results = scala.collection.mutable.ArrayBuffer[T]()
-      val latch = new java.util.concurrent.CountDownLatch(1)
-      observable.subscribe(new Observer[T] {
-        override def onNext(result: T): Unit = results += result
-        override def onError(e: Throwable): Unit = {
-          latch.countDown()
-          throw e
-        }
-        override def onComplete(): Unit = latch.countDown()
-      })
-      latch.await()
-      results.toSeq
-    }
   }
 }
