@@ -1,8 +1,9 @@
-type mismatch;
- found   : org.mongodb.scala.model.UpdateOneModel[Nothing]
-    (which expands to)  com.mongodb.client.model.UpdateOneModel[Nothing]
- required: org.mongodb.scala.model.WriteModel[org.mongodb.scala.bson.collection.immutable.Document]
-    (which expands to)  com.mongodb.client.model.WriteModel[org.mongodb.scala.bson.collection.immutable.Document]
-Note: Nothing <: org.mongodb.scala.bson.collection.immutable.Document, but Java-defined class WriteModel is invariant in type TResult.
-You may wish to investigate a wildcard type such as `_ <: org.mongodb.scala.bson.collection.immutable.Document`. (SLS 3.2.10)
-          updatesBuffer += UpdateOneModel(filter, update)
+// Fetch the updated documents from MongoDB
+val updatedIds = partition.map(row => row.getAs[String]("_id")).toSeq
+val updatedDocumentsFuture = collection.find(in("_id", updatedIds: _*)).toFuture()
+val updatedDocuments = Await.result(updatedDocumentsFuture, 500.seconds)
+
+// Add the updated documents to the Kafka message buffer
+updatedDocuments.foreach { updatedDocument =>
+  messagesBuffer += updatedDocument
+}
