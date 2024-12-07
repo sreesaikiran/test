@@ -7,7 +7,7 @@ import com.zaplabs.utils.ConfigUtils
 import org.apache.avro.Schema
 import org.apache.spark.sql.{DataFrame, Row}
 import org.mongodb.scala.bson.collection.immutable.Document
-import org.mongodb.scala.bson.{BsonArray, BsonBoolean, BsonDateTime, BsonDocument, BsonDouble, BsonInt32, BsonString}
+import org.mongodb.scala.bson.{BsonArray, BsonBoolean, BsonDateTime, BsonDouble, BsonInt32, BsonString}
 import org.mongodb.scala.model.{Filters, Updates}
 import org.mongodb.scala.{MongoClient, _}
 
@@ -69,24 +69,27 @@ object OpenHomesProcessor {
             val openHouseArray = openHomes.map { openHome =>
               val fields = openHome.schema.fieldNames.map { fieldName =>
                 val value = openHome.getAs[Any](fieldName) match {
-                  case s: String => BsonString(s)
-                  case i: Int => BsonInt32(i)
-                  case b: Boolean => BsonBoolean(b)
-                  case d: Double => BsonDouble(d)
+                  case s: String              => BsonString(s)
+                  case i: Int                 => BsonInt32(i)
+                  case b: Boolean             => BsonBoolean(b)
+                  case d: Double              => BsonDouble(d)
                   case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
-                  case arr: WrappedArray[_] => BsonArray(arr.map {
-                    case s: String => BsonString(s)
-                    case i: Int => BsonInt32(i)
-                    case b: Boolean => BsonBoolean(b)
-                    case d: Double => BsonDouble(d)
-                    case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
-                    case other => throw new IllegalArgumentException(s"Unsupported type in array: ${other.getClass}")
-                  }.toSeq.asJava)
-                  case other => throw new IllegalArgumentException(s"Unsupported type: ${other.getClass}")
+                  case arr: WrappedArray[_] =>
+                    BsonArray(arr.map {
+                      case s: String              => BsonString(s)
+                      case i: Int                 => BsonInt32(i)
+                      case b: Boolean             => BsonBoolean(b)
+                      case d: Double              => BsonDouble(d)
+                      case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
+                      case other =>
+                        throw new IllegalArgumentException(s"Unsupported type in array: ${other.getClass}")
+                    }.toSeq) // Ensure it's a Scala Seq
+                  case other =>
+                    throw new IllegalArgumentException(s"Unsupported type: ${other.getClass}")
                 }
                 fieldName -> value
               }.toMap
-              Document(BsonDocument(fields))
+              Document(fields)
             }
 
             Updates.combine(
