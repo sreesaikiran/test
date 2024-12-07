@@ -1,25 +1,8 @@
-val openHouseArray = openHomes.map { openHome =>
-  val fields = openHome.schema.fieldNames.map { fieldName =>
-    val value = openHome.getAs[Any](fieldName) match {
-      case s: String              => BsonString(s)
-      case i: Int                 => BsonInt32(i)
-      case b: Boolean             => BsonBoolean(b)
-      case d: Double              => BsonDouble(d)
-      case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
-      case arr: WrappedArray[_] =>
-        BsonArray(arr.map {
-          case s: String              => BsonString(s)
-          case i: Int                 => BsonInt32(i)
-          case b: Boolean             => BsonBoolean(b)
-          case d: Double              => BsonDouble(d)
-          case ts: java.sql.Timestamp => BsonDateTime(ts.getTime)
-          case other =>
-            throw new IllegalArgumentException(s"Unsupported type in array: ${other.getClass}")
-        }.toSeq) // Ensure it's a Scala Seq
-      case other =>
-        throw new IllegalArgumentException(s"Unsupported type: ${other.getClass}")
-    }
-    fieldName -> value
-  }.toMap
-  Document(fields)
-}
+type mismatch;
+ found   : org.mongodb.scala.model.UpdateOneModel[Nothing]
+    (which expands to)  com.mongodb.client.model.UpdateOneModel[Nothing]
+ required: org.mongodb.scala.model.WriteModel[org.mongodb.scala.bson.collection.immutable.Document]
+    (which expands to)  com.mongodb.client.model.WriteModel[org.mongodb.scala.bson.collection.immutable.Document]
+Note: Nothing <: org.mongodb.scala.bson.collection.immutable.Document, but Java-defined class WriteModel is invariant in type TResult.
+You may wish to investigate a wildcard type such as `_ <: org.mongodb.scala.bson.collection.immutable.Document`. (SLS 3.2.10)
+          updatesBuffer += UpdateOneModel(filter, update)
