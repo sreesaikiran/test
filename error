@@ -1,4 +1,5 @@
-84:26
-no `: _*' annotation allowed here
-(such annotations are only allowed in arguments to *-parameters)
-                  }.toSeq: _*)
+overloaded method value apply with alternatives:
+  (elems: org.mongodb.scala.bson.BsonMagnets.CanBeBsonValue*)org.mongodb.scala.bson.BsonArray <and>
+  (elems: Iterable[org.mongodb.scala.bson.BsonValue])org.mongodb.scala.bson.BsonArray
+ cannot be applied to (java.util.List[org.bson.BsonValue with Comparable[_ >: org.bson.BsonString with org.bson.BsonInt32 with org.bson.BsonBoolean with org.bson.BsonDouble with org.bson.BsonDateTime <: org.bson.BsonValue with Comparable[_ >: org.bson.BsonString with org.bson.BsonInt32 with org.bson.BsonBoolean with org.bson.BsonDouble with org.bson.BsonDateTime <: org.bson.BsonValue]]])
+                  case arr: WrappedArray[_] => BsonArray(arr.map {
