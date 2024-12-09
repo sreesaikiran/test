@@ -1,9 +1,14 @@
-// Fetch the updated documents from MongoDB
-val updatedIds = partition.map(row => row.getAs[String]("_id")).toSeq
-val updatedDocumentsFuture = collection.find(in("_id", updatedIds: _*)).toFuture()
-val updatedDocuments = Await.result(updatedDocumentsFuture, 500.seconds)
-
-// Add the updated documents to the Kafka message buffer
-updatedDocuments.foreach { updatedDocument =>
-  messagesBuffer += updatedDocument
-}
+ val dynamoWriteRequest = new WriteRequest().withPutRequest(
+            new PutRequest().withItem(Map(
+              "id" -> new AttributeValue(row.getAs[String]("_id")),
+              "open_homes" -> new AttributeValue().withL(openHomes.map { openHome =>
+                new AttributeValue().withM(openHome.schema.fieldNames.map { fieldName =>
+                  fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
+                }.toMap.asJava)
+              }.asJava)
+            ).asJava)
+          )
+type mismatch;
+ found   : Iterable[(String, com.amazonaws.services.dynamodbv2.model.AttributeValue)]
+ required: java.util.Map[String,com.amazonaws.services.dynamodbv2.model.AttributeValue]
+              }.toMap.asJava)
