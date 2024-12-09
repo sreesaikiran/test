@@ -1,14 +1,20 @@
- val dynamoWriteRequest = new WriteRequest().withPutRequest(
-            new PutRequest().withItem(Map(
-              "id" -> new AttributeValue(row.getAs[String]("_id")),
-              "open_homes" -> new AttributeValue().withL(openHomes.map { openHome =>
-                new AttributeValue().withM(openHome.schema.fieldNames.map { fieldName =>
-                  fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
-                }.toMap.asJava)
-              }.asJava)
-            ).asJava)
+import scala.jdk.CollectionConverters._
+import com.amazonaws.services.dynamodbv2.model.{AttributeValue, PutRequest, WriteRequest}
+
+// Constructing the WriteRequest
+val dynamoWriteRequest = new WriteRequest().withPutRequest(
+  new PutRequest().withItem(
+    Map(
+      "id" -> new AttributeValue(row.getAs[String]("_id")),
+      "open_homes" -> new AttributeValue().withL(
+        openHomes.map { openHome =>
+          new AttributeValue().withM(
+            openHome.schema.fieldNames.map { fieldName =>
+              fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
+            }.toMap.asJava
           )
-type mismatch;
- found   : Iterable[(String, com.amazonaws.services.dynamodbv2.model.AttributeValue)]
- required: java.util.Map[String,com.amazonaws.services.dynamodbv2.model.AttributeValue]
-              }.toMap.asJava)
+        }.asJava
+      )
+    ).asJava
+  )
+)
