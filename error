@@ -1,42 +1,66 @@
-val dynamoUpdateRequest = if (openHomes.nonEmpty) {
-  val openHomesHash = calculateOpenHomesHash(openHomes)
-  new UpdateItemRequest()
-    .withTableName("mdp-mls-listing-ids-dev")
-    .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
-    .withUpdateExpression(
-      """SET open_homes = :openHomes, 
-        |open_homes.hash_code = :hashCode, 
-        |open_homes.is_open_homes = :isOpenHomes, 
-        |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
+import scala.collection.mutable.ArrayBuffer
+import com.amazonaws.services.dynamodbv2.model._
+
+// Buffer to hold update requests
+val updateRequests = ArrayBuffer[UpdateItemRequest]()
+
+// Example: Add UpdateItemRequest objects to the buffer
+val updateOpenHomesRequest = new UpdateItemRequest()
+  .withTableName("mdp-mls-listing-ids-dev")
+  .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+  .withUpdateExpression("SET open_homes = :openHomes")
+  .withExpressionAttributeValues(Map(
+    ":openHomes" -> new AttributeValue().withL(
+      openHomes.map { openHome =>
+        new AttributeValue().withM(
+          openHome.schema.fieldNames.map { fieldName =>
+            fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
+          }.toMap.asJava
+        )
+      }.asJava
     )
-    .withExpressionAttributeValues(Map(
-      ":openHomes" -> new AttributeValue().withL(
-        openHomes.map { openHome =>
-          new AttributeValue().withM(
-            openHome.schema.fieldNames.map { fieldName =>
-              fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
-            }.toMap.asJava
-          )
-        }.asJava
-      ),
-      ":hashCode" -> new AttributeValue().withN(openHomesHash.toString),
-      ":isOpenHomes" -> new AttributeValue().withBOOL(true),
-      ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
-    ).asJava)
-} else {
-  new UpdateItemRequest()
-    .withTableName("mdp-mls-listing-ids-dev")
-    .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
-    .withUpdateExpression(
-      """SET open_homes = :openHomes, 
-        |open_homes.hash_code = :hashCode, 
-        |open_homes.is_open_homes = :isOpenHomes, 
-        |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
-    )
-    .withExpressionAttributeValues(Map(
-      ":openHomes" -> new AttributeValue().withL(new java.util.ArrayList[AttributeValue]()),
-      ":hashCode" -> new AttributeValue().withN("0"),
-      ":isOpenHomes" -> new AttributeValue().withBOOL(false),
-      ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
-    ).asJava)
+  ).asJava)
+
+val updateNestedAttributesRequest = new UpdateItemRequest()
+  .withTableName("mdp-mls-listing-ids-dev")
+  .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+  .withUpdateExpression(
+    """SET open_homes.hash_code = :hashCode, 
+      |open_homes.is_open_homes = :isOpenHomes, 
+      |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
+  )
+  .withExpressionAttributeValues(Map(
+    ":hashCode" -> new AttributeValue().withN(calculateOpenHomesHash(openHomes).toString),
+    ":isOpenHomes" -> new AttributeValue().withBOOL(true),
+    ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
+  ).asJava)
+
+// Add requests to the buffer
+updateRequests += updateOpenHomesRequest
+updateRequests += updateNestedAttributesRequest
+
+// Function to execute requests in batches
+def executeBatchUpdates(requests: ArrayBuffer[UpdateItemRequest]): Unit = {
+  // Maximum 25 requests per transaction
+  val maxBatchSize = 25
+  requests.grouped(maxBatchSize).foreach { batch =>
+    val transactItems = batch.map { request =>
+      new TransactWriteItem().withUpdate(request)
+    }
+    val transactWriteRequest = new TransactWriteItemsRequest()
+      .withTransactItems(transactItems.asJava)
+
+    try {
+      // Execute the transaction
+      val dynamoDbClient = AmazonDynamoDBClientBuilder.defaultClient()
+      dynamoDbClient.transactWriteItems(transactWriteRequest)
+      println(s"Successfully executed batch of size ${batch.size}")
+    } catch {
+      case e: Exception =>
+        println(s"Error executing batch: ${e.getMessage}")
+    }
+  }
 }
+
+// Execute the batched requests
+executeBatchUpdates(updateRequests)
