@@ -1,36 +1,42 @@
-Failed to update item in DynamoDB: Invalid UpdateExpression: Two document paths overlap with each other; must remove or rewrite one of these paths; path one: [open_homes], path two: [open_homes, hash_code]
 val dynamoUpdateRequest = if (openHomes.nonEmpty) {
-            val openHomesHash = calculateOpenHomesHash(openHomes)
-            new UpdateItemRequest()
-              .withTableName("mdp-mls-listing-ids-dev")
-              .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
-              .withUpdateExpression("SET open_homes = :openHomes, open_homes_hash_code = :hashCode, mls_listing_data_last_change_date = :lastChangeDate")
-              .withExpressionAttributeValues(Map(
-                ":openHomes" -> new AttributeValue().withL(
-                  openHomes.map { openHome =>
-                    new AttributeValue().withM(
-                      openHome.schema.fieldNames.map { fieldName =>
-                        fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
-                      }.toMap.asJava
-                    )
-                  }.asJava
-                ),
-                ":hashCode" -> new AttributeValue().withN(openHomesHash.toString),
-                ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
-              ).asJava)
-          } else {
-            new UpdateItemRequest()
-              .withTableName("mdp-mls-listing-ids-dev")
-              .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
-              .withUpdateExpression("SET open_homes = :openHomes, open_homes.#hash_code = :hashCode, open_homes.#is_open_homes = :isOpenHomes, mls_listing_data_last_change_date = :lastChangeDate")
-              .withExpressionAttributeValues(Map(
-                ":openHomes" -> new AttributeValue().withL(new java.util.ArrayList[AttributeValue]()),
-                ":hashCode" -> new AttributeValue().withN("0"),
-                ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString),
-                ":isOpenHomes" -> new AttributeValue().withBOOL(false)
-              ).asJava)
-              .withExpressionAttributeNames(Map(
-                "#hash_code" -> "hash_code",
-                "#is_open_homes" -> "is_open_homes"
-              ).asJava)
-          }
+  val openHomesHash = calculateOpenHomesHash(openHomes)
+  new UpdateItemRequest()
+    .withTableName("mdp-mls-listing-ids-dev")
+    .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+    .withUpdateExpression(
+      """SET open_homes = :openHomes, 
+        |open_homes.hash_code = :hashCode, 
+        |open_homes.is_open_homes = :isOpenHomes, 
+        |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
+    )
+    .withExpressionAttributeValues(Map(
+      ":openHomes" -> new AttributeValue().withL(
+        openHomes.map { openHome =>
+          new AttributeValue().withM(
+            openHome.schema.fieldNames.map { fieldName =>
+              fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
+            }.toMap.asJava
+          )
+        }.asJava
+      ),
+      ":hashCode" -> new AttributeValue().withN(openHomesHash.toString),
+      ":isOpenHomes" -> new AttributeValue().withBOOL(true),
+      ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
+    ).asJava)
+} else {
+  new UpdateItemRequest()
+    .withTableName("mdp-mls-listing-ids-dev")
+    .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+    .withUpdateExpression(
+      """SET open_homes = :openHomes, 
+        |open_homes.hash_code = :hashCode, 
+        |open_homes.is_open_homes = :isOpenHomes, 
+        |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
+    )
+    .withExpressionAttributeValues(Map(
+      ":openHomes" -> new AttributeValue().withL(new java.util.ArrayList[AttributeValue]()),
+      ":hashCode" -> new AttributeValue().withN("0"),
+      ":isOpenHomes" -> new AttributeValue().withBOOL(false),
+      ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
+    ).asJava)
+}
