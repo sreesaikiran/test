@@ -1,9 +1,10 @@
 import scala.collection.mutable.ArrayBuffer
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClient
 import com.amazonaws.services.dynamodbv2.model._
-import scala.jdk.CollectionConverters._
+import scala.collection.JavaConverters._
 
-// Buffer to hold update requests
-val updateRequests = ArrayBuffer[UpdateItemRequest]()
+// Initialize DynamoDB client
+val dynamoDbClient = AmazonDynamoDBClient.builder().build()
 
 // Function to generate UpdateItemRequest based on openHomes being empty or not
 def createUpdateRequests(row: Row, openHomes: Seq[Row], nowMillis: Long): Seq[UpdateItemRequest] = {
@@ -72,31 +73,19 @@ def createUpdateRequests(row: Row, openHomes: Seq[Row], nowMillis: Long): Seq[Up
   }
 }
 
-// Add requests to the buffer based on the `openHomes` logic
-updateRequests ++= createUpdateRequests(row, openHomes, nowMillis)
-
-// Function to execute requests in batches
-def executeBatchUpdates(requests: ArrayBuffer[UpdateItemRequest]): Unit = {
-  // Maximum 25 requests per transaction
-  val maxBatchSize = 25
-  requests.grouped(maxBatchSize).foreach { batch =>
-    val transactItems = batch.map { request =>
-      new TransactWriteItem().withUpdate(request)
-    }
-    val transactWriteRequest = new TransactWriteItemsRequest()
-      .withTransactItems(transactItems.asJava)
-
+// Function to execute requests sequentially
+def executeSequentialUpdates(requests: Seq[UpdateItemRequest]): Unit = {
+  requests.foreach { request =>
     try {
-      // Execute the transaction
-      val dynamoDbClient = AmazonDynamoDBClientBuilder.defaultClient()
-      dynamoDbClient.transactWriteItems(transactWriteRequest)
-      println(s"Successfully executed batch of size ${batch.size}")
+      dynamoDbClient.updateItem(request)
+      println(s"Successfully updated item with key: ${request.getKey}")
     } catch {
       case e: Exception =>
-        println(s"Error executing batch: ${e.getMessage}")
+        println(s"Error updating item with key: ${request.getKey}, error: ${e.getMessage}")
     }
   }
 }
 
-// Execute the batched requests
-executeBatchUpdates(updateRequests)
+// Example usage
+val updateRequests = createUpdateRequests(row, openHomes, nowMillis)
+executeSequentialUpdates(updateRequests)
