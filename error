@@ -1,43 +1,79 @@
 import scala.collection.mutable.ArrayBuffer
 import com.amazonaws.services.dynamodbv2.model._
+import scala.jdk.CollectionConverters._
 
 // Buffer to hold update requests
 val updateRequests = ArrayBuffer[UpdateItemRequest]()
 
-// Example: Add UpdateItemRequest objects to the buffer
-val updateOpenHomesRequest = new UpdateItemRequest()
-  .withTableName("mdp-mls-listing-ids-dev")
-  .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
-  .withUpdateExpression("SET open_homes = :openHomes")
-  .withExpressionAttributeValues(Map(
-    ":openHomes" -> new AttributeValue().withL(
-      openHomes.map { openHome =>
-        new AttributeValue().withM(
-          openHome.schema.fieldNames.map { fieldName =>
-            fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
-          }.toMap.asJava
+// Function to generate UpdateItemRequest based on openHomes being empty or not
+def createUpdateRequests(row: Row, openHomes: Seq[Row], nowMillis: Long): Seq[UpdateItemRequest] = {
+  if (openHomes.nonEmpty) {
+    val openHomesHash = calculateOpenHomesHash(openHomes)
+
+    // First request: Update the top-level `open_homes`
+    val updateOpenHomesRequest = new UpdateItemRequest()
+      .withTableName("mdp-mls-listing-ids-dev")
+      .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+      .withUpdateExpression("SET open_homes = :openHomes")
+      .withExpressionAttributeValues(Map(
+        ":openHomes" -> new AttributeValue().withL(
+          openHomes.map { openHome =>
+            new AttributeValue().withM(
+              openHome.schema.fieldNames.map { fieldName =>
+                fieldName -> new AttributeValue(openHome.getAs[Any](fieldName).toString)
+              }.toMap.asJava
+            )
+          }.asJava
         )
-      }.asJava
-    )
-  ).asJava)
+      ).asJava)
 
-val updateNestedAttributesRequest = new UpdateItemRequest()
-  .withTableName("mdp-mls-listing-ids-dev")
-  .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
-  .withUpdateExpression(
-    """SET open_homes.hash_code = :hashCode, 
-      |open_homes.is_open_homes = :isOpenHomes, 
-      |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
-  )
-  .withExpressionAttributeValues(Map(
-    ":hashCode" -> new AttributeValue().withN(calculateOpenHomesHash(openHomes).toString),
-    ":isOpenHomes" -> new AttributeValue().withBOOL(true),
-    ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
-  ).asJava)
+    // Second request: Update nested attributes
+    val updateNestedAttributesRequest = new UpdateItemRequest()
+      .withTableName("mdp-mls-listing-ids-dev")
+      .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+      .withUpdateExpression(
+        """SET open_homes.hash_code = :hashCode, 
+          |open_homes.is_open_homes = :isOpenHomes, 
+          |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
+      )
+      .withExpressionAttributeValues(Map(
+        ":hashCode" -> new AttributeValue().withN(openHomesHash.toString),
+        ":isOpenHomes" -> new AttributeValue().withBOOL(true),
+        ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
+      ).asJava)
 
-// Add requests to the buffer
-updateRequests += updateOpenHomesRequest
-updateRequests += updateNestedAttributesRequest
+    Seq(updateOpenHomesRequest, updateNestedAttributesRequest)
+  } else {
+    // First request: Update the top-level `open_homes` to an empty list
+    val updateOpenHomesRequest = new UpdateItemRequest()
+      .withTableName("mdp-mls-listing-ids-dev")
+      .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+      .withUpdateExpression("SET open_homes = :openHomes")
+      .withExpressionAttributeValues(Map(
+        ":openHomes" -> new AttributeValue().withL(new java.util.ArrayList[AttributeValue]())
+      ).asJava)
+
+    // Second request: Update nested attributes for empty `open_homes`
+    val updateNestedAttributesRequest = new UpdateItemRequest()
+      .withTableName("mdp-mls-listing-ids-dev")
+      .withKey(Map("mls_listing_id" -> new AttributeValue(row.getAs[String]("_id"))).asJava)
+      .withUpdateExpression(
+        """SET open_homes.hash_code = :hashCode, 
+          |open_homes.is_open_homes = :isOpenHomes, 
+          |mls_listing_data.last_change_date = :lastChangeDate""".stripMargin
+      )
+      .withExpressionAttributeValues(Map(
+        ":hashCode" -> new AttributeValue().withN("0"),
+        ":isOpenHomes" -> new AttributeValue().withBOOL(false),
+        ":lastChangeDate" -> new AttributeValue().withN(nowMillis.toString)
+      ).asJava)
+
+    Seq(updateOpenHomesRequest, updateNestedAttributesRequest)
+  }
+}
+
+// Add requests to the buffer based on the `openHomes` logic
+updateRequests ++= createUpdateRequests(row, openHomes, nowMillis)
 
 // Function to execute requests in batches
 def executeBatchUpdates(requests: ArrayBuffer[UpdateItemRequest]): Unit = {
