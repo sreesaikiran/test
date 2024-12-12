@@ -1,0 +1,1 @@
+com.amazonaws.services.dynamodbv2.local.server.LocalDynamoDBServerHandler - Unexpected exception occured WARNING: [sqlite] cannot open DB[11]: com.almworks.sqlite4java.SQLiteException: [-91] cannot load library: com.almworks.sqlite4java.SQLiteException: [-91] sqlite4java cannot find native library Dec 12, 2024 12:22:35 PM com.almworks.sqlite4java.Internal log
