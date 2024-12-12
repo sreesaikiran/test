@@ -1,1 +1,22 @@
-java.lang.UnsupportedOperationException: value type: class scala.collection.immutable.HashMap$HashTrieMap
+val json: JsValue = Json.parse(jsonData)
+
+  try {
+    // Convert JsValue to a Scala Map and then to a Java Map
+    val jsonMap: java.util.Map[String, Object] = json.as[Map[String, JsValue]].mapValues {
+      case JsString(value) => value
+      case JsNumber(value) => value.toDouble.asInstanceOf[Object]
+      case JsBoolean(value) => value.asInstanceOf[Object]
+      case JsObject(fields) => fields.mapValues(_.toString).asJava.asInstanceOf[Object]
+      case JsArray(values) => values.map(_.toString).asJava
+      case JsNull => null
+      case _ => throw new IllegalArgumentException("Unsupported JSON type")
+    }.asJava
+
+    // Create an Item and insert it into DynamoDB
+    val item = new Item().withPrimaryKey("id", jsonMap.get("id")).withMap("data", jsonMap)
+    table.putItem(item)
+    println("Item inserted successfully!")
+  } catch {
+    case e: Exception =>
+      println(s"Error inserting item: ${e.getMessage}")
+  }
