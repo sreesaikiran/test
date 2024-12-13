@@ -1,22 +1,103 @@
-val json: JsValue = Json.parse(jsonData)
+package com.zaplabs
 
-  try {
-    // Convert JsValue to a Scala Map and then to a Java Map
-    val jsonMap: java.util.Map[String, Object] = json.as[Map[String, JsValue]].mapValues {
-      case JsString(value) => value
-      case JsNumber(value) => value.toDouble.asInstanceOf[Object]
-      case JsBoolean(value) => value.asInstanceOf[Object]
-      case JsObject(fields) => fields.mapValues(_.toString).asJava.asInstanceOf[Object]
-      case JsArray(values) => values.map(_.toString).asJava
-      case JsNull => null
-      case _ => throw new IllegalArgumentException("Unsupported JSON type")
-    }.asJava
+import com.amazonaws.services.dynamodbv2.local.server.DynamoDBProxyServer
+import com.typesafe.config.{Config, ConfigFactory}
+import com.zaplabs.OpenHomesTestUtils.{createDynamoTable, getDataFromKafka, getDynamoDBData, insertDataToDynamoDB, startDynamoDB, startMongo, writeDataToMongo}
+import com.zaplabs.Runner.{Clargs, Mode}
+import de.flapdoodle.embed.mongo.transitions.RunningMongodProcess
+import de.flapdoodle.reverse.TransitionWalker
+import net.manub.embeddedkafka.EmbeddedKafka
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.{BeforeAndAfter, BeforeAndAfterAll}
+import org.slf4j.LoggerFactory
 
-    // Create an Item and insert it into DynamoDB
-    val item = new Item().withPrimaryKey("id", jsonMap.get("id")).withMap("data", jsonMap)
-    table.putItem(item)
-    println("Item inserted successfully!")
-  } catch {
-    case e: Exception =>
-      println(s"Error inserting item: ${e.getMessage}")
+import scala.collection.JavaConverters.asScalaBufferConverter
+
+class OpenHomesPurgeBatchTest extends AnyFunSuite with Matchers with BeforeAndAfter with BeforeAndAfterAll with EmbeddedKafka {
+  val logger = LoggerFactory.getLogger(getClass)
+  var mongoDProcess: TransitionWalker.ReachedState[RunningMongodProcess] = _
+  var dynamoServer: DynamoDBProxyServer = _
+  var config: Config = _
+  var clargs: Clargs = _
+
+  before {
+    try {
+      mongoDProcess = startMongo()
+      dynamoServer = startDynamoDB()
+      config = ConfigFactory.load()
+
+    } catch {
+      case exception: Exception =>
+        logger.error("Error while setting the test environment", exception)
+        fail("Error in before")
+    }
   }
+
+  after {
+    try {
+      mongoDProcess.close()
+      logger.info("Mongo Server stopped")
+      dynamoServer.stop()
+      logger.info("DynamoDB Server stopped")
+      logger.info("Spark Session stopped")
+    } catch {
+      case exception: Exception =>
+        logger.error("Error while shutting down the test environment", exception)
+    }
+  }
+
+  test("testMDPCase") {
+    try {
+      withRunningKafka {
+        logger.info("Running kafka")
+        println(config)
+        PostgresUtils.insertPostgresData(config)
+        writeDataToMongo("mongodb", config, TestData.mdpTestData1, "_id", "MLSNI_12154922")
+        clargs = Clargs(Some("test_mls"), Mode.mdp)
+        val processor = new OpenHomePurgeBatch(clargs)
+        processor.run()
+        val kafkaDataCount = getDataFromKafka(config)
+        assert(kafkaDataCount > 0, "Expected to receive at least one message from Kafka")
+      }
+    } catch {
+      case exception: Exception =>
+        logger.error("Error in testMain", exception)
+        fail("Error in testMain")
+    }
+  }
+
+  test("testPropsCase") {
+    try {
+      withRunningKafka {
+        logger.info("Running kafka")
+
+        println(config)
+        PostgresUtils.insertPostgresData(config)
+        createDynamoTable(config)
+
+        insertDataToDynamoDB(config, config.getString("aws.dynamodb.tableName"), "CRMLS_PW24062849", TestData.mls_listing_data1, TestData.openHouseData1)
+
+        writeDataToMongo("propsMongodb", config, TestData.propsTestData1, "_id", "CRMLS_PW24062849")
+
+        clargs = Clargs(Some("test_mls"), Mode.props)
+        val processor = new OpenHomePurgeBatch(clargs)
+        processor.run()
+
+        val ddbUpdatedData = getDynamoDBData(config, List("CRMLS_PW24062849"))
+        val openHomesSize = ddbUpdatedData.asScala.headOption
+          .flatMap { item =>
+            Option(item.get("open_house")).map(_.getM.get("open_homes").getL.size())
+          }
+          .getOrElse(0)
+        logger.info(s"Size of open homes data from DynamoDB: $openHomesSize")
+        assert(openHomesSize == 1, s"Expected openHomesSize to be 1, but got $openHomesSize")
+      }
+    } catch {
+      case exception: Exception =>
+        logger.error("Error in testMain", exception)
+        fail("Error in testMain")
+    }
+  }
+
+}
