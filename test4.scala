@@ -1,161 +1,122 @@
-package com.zaplabs
-package webapi.downloader.startegy
+package com.zaplabs.webapi.downloader.strategy
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.scala.DefaultScalaModule
-import com.fasterxml.jackson.module.scala.experimental.ScalaObjectMapper
-import com.typesafe.scalalogging.StrictLogging
-import com.zaplabs.AwsBatchMain.config
-import com.zaplabs.dao.{DaoLoader, PostgresDownloaderDao}
-import com.zaplabs.utils.DateUtils.convertToInstant
-import com.zaplabs.utils.{DataDogLogging, PhotoUtils}
+import com.zaplabs.utils.PhotoUtils
+import com.zaplabs.webapi.dto.{ImagesMetaDataTrestleSpecific, MediaInfoTrestleSpecific}
 import com.zaplabs.webapi.WebApiUtils
 import com.zaplabs.webapi.WebApiUtils.DownloadPageFailure
-import com.zaplabs.webapi.dto.{ImagesMetaDataTrestleSpecific, MediaInfoTrestleSpecific}
+import org.scalatest.concurrent.ScalaFutures
+import org.scalatest.flatspec.AsyncFlatSpec
+import org.scalatest.matchers.should.Matchers
+import org.mockito.MockitoSugar
 import org.asynchttpclient.AsyncHttpClient
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutorService, Future}
+import java.util.concurrent.Executors
 import play.api.libs.json.Json
 
-import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContextExecutorService, Future}
+class TrestleStrategyTest extends AsyncFlatSpec with Matchers with MockitoSugar with ScalaFutures {
 
-class TrestleStrategy(
-    downloadAssistant: PhotoUtils.DownloadProcessAssistant,
-    threadPool: ExecutionContextExecutorService,
-    source: String,
-    processId: String,
-    waitTimeInMilliSecBetweenWebAPICalls: Int,
-    outputSubPath: String,
-    outputLogPath: String
-) extends StrictLogging
-    with DownloadStrategy {
+  // Mock dependencies
+  val mockDownloadAssistant = mock[PhotoUtils.DownloadProcessAssistant]
+  val mockAsyncHttpClient = mock[AsyncHttpClient]
+  val mockExecutionContext: ExecutionContextExecutorService = 
+    ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(2))
 
-  val mapper = new ObjectMapper() with ScalaObjectMapper
-  mapper.registerModule(DefaultScalaModule)
+  // Sample data
+  val testListingId = "12345"
+  val testUrl = "https://mockapi.com/images"
+  val testPhotoUrl = WebApiPhotoUrl(testListingId, testUrl)
 
-  val postgresDao = DaoLoader.loadDao(config, "postgres").asInstanceOf[PostgresDownloaderDao]
-  var useCustomOrder = postgresDao.getMdpProperty("use.trestle.photo.customorder.field", source).toBoolean
-  var includeFloorPlan = postgresDao.getMdpProperty("include.floor.plan.photo.type", source).toBoolean
+  val testImagesMetadata = ImagesMetaDataTrestleSpecific(
+    Seq(
+      MediaInfoTrestleSpecific(MediaURL = "https://mockimage1.com", MediaCategory = "Photo", Order = 1, LongDescription = "Sample Image 1"),
+      MediaInfoTrestleSpecific(MediaURL = "https://mockimage2.com", MediaCategory = "Photo", Order = 2, LongDescription = "Sample Image 2")
+    )
+  )
 
-  override def processImages(
-      imageUrls: WebApiPhotoUrl,
-      initialRequestToken: String,
-      useHeader: Boolean,
-      headerKeyValue: Map[String, String],
-      ahc: AsyncHttpClient
-  ): Future[Unit] = {
-    val listingNum = imageUrls.listingId
-    val startTime = convertToInstant(outputSubPath)
-    logger.info(s"Downloading photos for ${listingNum}, url ${imageUrls.url}")
-    Future {
-      var apiUrl: Option[String] = Option(imageUrls.url)
-      var imagesList: Seq[MediaInfoTrestleSpecific] = Seq.empty[MediaInfoTrestleSpecific]
-      try {
-        while (apiUrl.isDefined) {
-          DataDogLogging(
-            mdpSourceName = source,
-            dataDestination = "downloader component",
-            action = s"Hit Download API request",
-            reason = s"Hit API for photo download",
-            rdmSourceSystemKey = source,
-            mdpJobId = processId,
-            downloadType = "incrphoto",
-            eventTimestamp = startTime,
-            timestamp = startTime.toEpochMilli
-          )
-          val mediaPage =
-            Await.result(
-              WebApiUtils.downloadPage(ahc, apiUrl.get, initialRequestToken, logger, useHeader, headerKeyValue),
-              Duration.Inf
-            )
-          val images = mapper.readValue(mediaPage.toString, classOf[ImagesMetaDataTrestleSpecific])
-          imagesList = imagesList ++ images.value
-          apiUrl = (mediaPage \ "@odata.nextLink").asOpt[String]
-        }
-        if (!includeFloorPlan) {
-          imagesList = imagesList
-            .filter(media => Option(media.MediaCategory).isEmpty || media.MediaCategory.equals("Photo"))
-            .sortBy(_.Order)
-        } else {
-          imagesList = imagesList
-            .filter(media =>
-              Option(media.MediaCategory).isEmpty || media.MediaCategory.equals("Photo") || media.MediaCategory
-                .equals("FloorPlan")
-            )
-            .sortBy(_.Order)
-        }
-        val adjustOrder = imagesList.head.Order == 1
-        if (imagesList.nonEmpty) {
-          var failureCount: Int = 0
-          var customOrder = 0
-          imagesList.foreach { imageUrl =>
-            val mediaUrlToUse = DownloadStrategyFactory.checkMissingProtocolInImageURL(imageUrl.MediaURL)
-            try {
-              val (imageBytes: Array[Byte], contentType: String) = {
-                DataDogLogging(
-                  mdpSourceName = source,
-                  dataDestination = "downloader component",
-                  action = s"Download API request",
-                  reason = s"Hit API for photo download",
-                  rdmSourceSystemKey = source,
-                  mdpJobId = processId,
-                  downloadType = "incrphoto",
-                  eventTimestamp = startTime,
-                  timestamp = startTime.toEpochMilli
-                )
-                val imageAndContentType = PhotoUtils.getPhotoWithRedirect(mediaUrlToUse, ahc, 1)
-                (imageAndContentType._2, imageAndContentType._1)
-              }
-              // don't hit photo urls too fast, will cause exceeding quota issues.
-              Thread.sleep(waitTimeInMilliSecBetweenWebAPICalls)
-              try {
-                downloadAssistant.submitPhoto(
-                  listingNum,
-                  PhotoUtils.fileExtesionFromMime(contentType),
-                  imageBytes,
-                  if (!useCustomOrder) {
-                    if (adjustOrder) imageUrl.Order - 1 - failureCount else imageUrl.Order - failureCount
-                  } else { customOrder },
-                  null,
-                  if (imageUrl.LongDescription != null && imageUrl.LongDescription.equals("Virtual renderings"))
-                    imageUrl.LongDescription
-                  else ""
-                )
-                customOrder += 1
-              } catch {
-                case _: IllegalStateException =>
-                  logger.error(
-                    s"Failed, photo processing for listingNum $listingNum, image# ${imageUrl.Order}, ${mediaUrlToUse}  skipped due to unsupported format."
-                  )
-                  logger.error(s"Resp as json -> ${Json.parse(imageBytes)}")
-              }
-            } catch {
-              case ex: Exception =>
-                failureCount += 1
-                logger.error(
-                  s"Failed, photo processing for listingNum $listingNum, image# ${imageUrl.Order}, ${mediaUrlToUse} skipped due to error $ex"
-                )
-            }
-          }
-          logger.info(s"Photo download complete for $listingNum, failures : " + failureCount)
-          downloadAssistant.reportProcessingListingDone(listingNum, true)
-        } else {
-          logger.warn("No images to process for listing : " + listingNum)
-          downloadAssistant.reportProcessingListingDone(listingNum, true)
-        }
-      } catch {
-        case e: DownloadPageFailure =>
-          e.printStackTrace()
-          logger.error(
-            "Error downloading image metadata page(s) for : " + listingNum + ", marking as a failure. Message : " + e.getMessage
-          )
-          downloadAssistant.reportProcessingListingDone(listingNum, false)
-        case e: Exception =>
-          e.printStackTrace()
-          logger.error(
-            "An unknown exception occurred while downloading image metadata for : " + listingNum + ", marking as a failure. Message : " + e.getMessage
-          )
-          downloadAssistant.reportProcessingListingDone(listingNum, false)
-      }
-    }(threadPool)
+  // Mock WebApiUtils behavior
+  val testPageResponse = Json.parse(
+    """
+      |{
+      |  "value": [
+      |    {"MediaURL": "https://mockimage1.com", "MediaCategory": "Photo", "Order": 1, "LongDescription": "Sample Image 1"},
+      |    {"MediaURL": "https://mockimage2.com", "MediaCategory": "Photo", "Order": 2, "LongDescription": "Sample Image 2"}
+      |  ],
+      |  "@odata.nextLink": null
+      |}
+      |""".stripMargin
+  )
+
+  behavior of "TrestleStrategy"
+
+  it should "process images successfully and submit them to downloadAssistant" in {
+    // Arrange: mock WebApiUtils to return the test JSON response
+    when(WebApiUtils.downloadPage(any[AsyncHttpClient], any[String], any[String], any, any[Boolean], any[Map[String, String]]))
+      .thenReturn(Future.successful(testPageResponse))
+
+    // Mock PhotoUtils to simulate successful photo retrieval
+    when(PhotoUtils.getPhotoWithRedirect(any[String], any[AsyncHttpClient], any[Int]))
+      .thenReturn(("image/jpeg", Array[Byte](1, 2, 3, 4)))
+
+    // Create the instance of TrestleStrategy
+    val trestleStrategy = new TrestleStrategy(
+      downloadAssistant = mockDownloadAssistant,
+      threadPool = mockExecutionContext,
+      source = "testSource",
+      processId = "testProcessId",
+      waitTimeInMilliSecBetweenWebAPICalls = 10,
+      outputSubPath = "2024-06-17",
+      outputLogPath = "/logs"
+    )
+
+    // Act
+    val result = trestleStrategy.processImages(
+      imageUrls = testPhotoUrl,
+      initialRequestToken = "testToken",
+      useHeader = false,
+      headerKeyValue = Map.empty,
+      ahc = mockAsyncHttpClient
+    )
+
+    // Assert
+    result.map { _ =>
+      verify(mockDownloadAssistant, times(2)).submitPhoto(
+        eqTo(testListingId),
+        any[String],
+        any[Array[Byte]],
+        any[Int],
+        any[Null],
+        any[String]
+      )
+    }
+  }
+
+  it should "handle DownloadPageFailure and mark processing as failed" in {
+    // Arrange: mock WebApiUtils to throw a DownloadPageFailure
+    when(WebApiUtils.downloadPage(any[AsyncHttpClient], any[String], any[String], any, any[Boolean], any[Map[String, String]]))
+      .thenReturn(Future.failed(new DownloadPageFailure("Failed to download page")))
+
+    val trestleStrategy = new TrestleStrategy(
+      downloadAssistant = mockDownloadAssistant,
+      threadPool = mockExecutionContext,
+      source = "testSource",
+      processId = "testProcessId",
+      waitTimeInMilliSecBetweenWebAPICalls = 10,
+      outputSubPath = "2024-06-17",
+      outputLogPath = "/logs"
+    )
+
+    // Act
+    val result = trestleStrategy.processImages(
+      imageUrls = testPhotoUrl,
+      initialRequestToken = "testToken",
+      useHeader = false,
+      headerKeyValue = Map.empty,
+      ahc = mockAsyncHttpClient
+    )
+
+    // Assert
+    result.map { _ =>
+      verify(mockDownloadAssistant).reportProcessingListingDone(testListingId, success = false)
+    }
   }
 }
