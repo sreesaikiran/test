@@ -1,19 +1,34 @@
+import org.mockito.MockitoSugar
+import org.mockito.ArgumentMatchers
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 
-class TrestleStrategy{
-val postgresDao = DaoLoader.loadDao(config, "postgres").asInstanceOf[PostgresDownloaderDao]
-  var useCustomOrder = postgresDao.getMdpProperty("use.trestle.photo.customorder.field", source).toBoolean
-  var includeFloorPlan = postgresDao.getMdpProperty("include.floor.plan.photo.type", source).toBoolean
-}
+class TrestleStrategyTest extends AnyFlatSpec with Matchers with MockitoSugar {
 
-object DaoLoader {
+  "TrestleStrategy" should "initialize variables with mocked DaoLoader and postgresDao" in {
+    // Mock DaoLoader and PostgresDownloaderDao
+    val mockPostgresDao = mock[PostgresDownloaderDao]
+    when(mockPostgresDao.getMdpProperty(ArgumentMatchers.eq("use.trestle.photo.customorder.field"), ArgumentMatchers.any[String]))
+      .thenReturn("true")
+    when(mockPostgresDao.getMdpProperty(ArgumentMatchers.eq("include.floor.plan.photo.type"), ArgumentMatchers.any[String]))
+      .thenReturn("false")
 
-  def loadDao(conf: Config, daoType: String): DownloaderDao = {
-    daoType match {
-      case "mongo" => new MongoDownloaderDaoImpl(conf)
-      case "oracle" => new OracleDownloaderDaoImpl(conf)
-      case "postgres" => new PostgresDownloaderDaoImpl(conf)
-      case dao => throw new IllegalStateException(s"DAO type not recognized -> $dao. Exiting.")
+    // Mock DaoLoader's behavior
+    val mockDaoLoader = mock[DaoLoader.type]
+    when(mockDaoLoader.loadDao(ArgumentMatchers.any[Config], ArgumentMatchers.eq("postgres")))
+      .thenReturn(mockPostgresDao)
+
+    // Use mockDaoLoader to create a TrestleStrategy instance
+    val strategy = new TrestleStrategy {
+      override val postgresDao: PostgresDownloaderDao = mockDaoLoader.loadDao(config, "postgres").asInstanceOf[PostgresDownloaderDao]
     }
-  }
 
+    // Assertions
+    strategy.useCustomOrder shouldEqual true
+    strategy.includeFloorPlan shouldEqual false
+
+    // Verify interactions
+    verify(mockPostgresDao).getMdpProperty("use.trestle.photo.customorder.field", ArgumentMatchers.any[String])
+    verify(mockPostgresDao).getMdpProperty("include.floor.plan.photo.type", ArgumentMatchers.any[String])
+  }
 }
